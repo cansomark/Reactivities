@@ -1,0 +1,301 @@
+
+Command:
+run api: dotnet run
+restore: dotnet restore
+watch: dotnet watch
+
+Creating Entity or Model
+
+Under Domain Folder
+1. Create Activity class
+
+public class Activity {
+	public Guid Id {get;set;}
+	public string Title {get;set;}
+	public DateTime Date {get;set;}
+	public string Description {get;set}
+}
+
+
+Under Percistance Folder
+
+install "Microsoft.EntityFrameworkCore.Sqlite"
+Note: It will change base on database that you need
+
+1. Create a class name DataContext
+
+using Domain;
+public class DataContext: DbContext {
+	public DbSet<Activity>Activities {get;set}
+}
+
+
+Connect it to a program
+
+Under API go to program file
+Add the following code
+
+builder.AddDbContext<DataContext>({
+	builder.UseSqlLite(builder.Configure.GetConnectionString("DefaultConnection"))
+})
+
+
+Configure the connection string
+appsetting.development.json
+
+"ConnectionString":{
+	"DefaultConnection":"Data-Source=reactivities.db"
+}
+
+Code First Migrations
+
+
+Install dotnet ef using cli
+	*dotnet tool install --global dotnet-ef
+Start migration
+	*dotnet ef migratios add nameHere -s API -p Persistance
+	
+Creating database
+Go to Program under API
+
+using var scope=app.Service.CreateScope();
+var service=scope.ServiceProvider;
+
+try{
+	var context=service.GetRequiredService<DataContext>();
+	context.Database.Mirgration();
+}catch(Exception ex){
+	var logger=service.GetRequiredService<ILogger<Program>>();
+	logger.LogerError(ex,"Having an error on migration");
+}
+
+run dotnet watch --no-hot-reload
+
+Creating API Controller
+
+On a Controller folder inside API folder
+
+create base Controller
+
+[ApiController]
+[Route("[controller]")]
+public class BaseController: ControllerBase{
+
+
+}
+
+
+Create Activities Controller
+
+public class ActivityController:BaseController{
+	private readonly DataContext _context;
+	public ActivityController(DataContext context){
+		_context=context;
+	}
+	
+	[HttpGet]
+	public async Task<ActionResult<List<Activit>>>(){
+		return await _context.Activities.ToListAsync();
+	}
+	
+	[HttpGet("{id}")]
+	public async Task<Activity>GetActivities(Guid id){
+		return await _context.Activities.FindAsync(id)
+	}
+}
+
+//Configure Policy
+
+builder.Services.Cors(opt=>{
+	opt.Policy("PolicyName",policy=>{
+		policy.AllowAnyHeader().AllowAnyMethod().WithOrigin("http://")
+	})
+});
+
+
+app.UsePolicy("Policyname");
+Not It should on top before execution
+
+
+//Creating Mediator
+
+Install This addons: [MediatR.Extensions.Microsoft.DependencyInjection]
+
+Go to Application and create application folder any name
+
+public class List {
+	
+	public class Query:IRequest<List<Activity>>{}
+	
+	public class Handler:IRequestHandler<Query, List<Activity>> {
+		private readonly DataContext _context;
+		
+		public Handler(DataContext context) {
+			_context=context;
+		}
+		
+		
+		public async Task<ActionResult<ListActivity>> Handle<Query request, CancelationToken cancelationtoken>{
+			return await _context.Activities.ToListAsync();
+		}
+	}
+}
+
+
+//Update API Controller
+
+public class ActivityController: BaseController{
+
+	private readonly IMediatR _mediatR;
+	
+	public ActivityController(IMediatR mediatR){
+		_mediatR=mediatR;
+	}
+	
+     [HttpGet]
+	 public async Task<ActionResult<List<activity>>>GetActivities(){
+		return await _mediatR.Send(new List.Query());
+	 }
+}
+
+Program add IMediatR
+
+builder.Services.AddIMediatR(typeOf(List.Handler()));
+
+Refactor the code
+
+go to BaseController
+
+public class BaseController:CotrollerBase{
+
+	private IMediatR _mediatR;
+	
+	protected IMediatR Mediator=>_mediatR ??= HttpContext.RequestServices.GetServices<IMediatR>();
+
+}
+
+//Update API Controller
+
+public class ActivityController: BaseController{
+
+	
+	
+     [HttpGet]
+	 public async Task<ActionResult<List<activity>>>GetActivities(){
+		return await Mediator.Send(new List.Query());
+	 }
+}
+
+//Update the filter api
+
+go to Application and create Details folder
+
+public class Details {
+	public class Query:IRequest<Activity>{
+		public Guid Id {get;set;}
+	}
+	
+	public class Handler:IRequestHandler<Query, Activity>{
+		private readonly DataContext _context;
+		public Handler(DataContext context){
+			_context=context
+		}		
+		
+		public async Task<ActionResult<Activity>> Handle(Query request, CancelationToken cancelationtoken){
+			return await _context.Activities.FindAsync(request.id);
+		}
+	}
+}
+
+update API Controller
+
+[HttpGet("{id}")]
+public async Task<ActionResult<Activity>>GetActivities(Guid id){
+	return await Mediator.Send(new Details.Query{Id:id});
+}
+
+
+Creating Add Middleware
+
+public class AddDetails {
+	public class Command:IRequest{
+		public Domain.Activity Activity {get;set;}
+	}
+	
+	public class Handler:IRequestHandler<Command> {
+		private readonly DataContext _context;
+		public Handler(DataContext context){
+			_context=context;
+		}
+		public async Task<Unit> Handle(Command request, CancelationToken cancelationtoken)
+		{
+			_context.Activities.Add(request.Activity);
+			await _context.SaveChangesAsync();
+			return Unit.Value;
+		}
+	}
+	
+}
+
+//Controller
+
+[HttpPost]
+public async Task<IActionRequest>AddDetails(Activity activity){
+	return Ok(await Mediator.Send(new AddDetails.Command{Activity=activity}))
+}
+
+
+//Edit
+
+Create AutoMapper
+download: [AutoMapper.Extensions.Microsoft.DependencyInjection]
+Go to application create a folder name Core
+Create a class name MapperProfile
+
+public class MapperProfile: Profile {
+	public MapperProfile(){
+		CreateMap(Domain.Actity,Domain.Activity);
+	}
+}
+
+
+//Program Add automapper
+
+builder.Services.AddAutoMapper(typeof(MapperProfile).Assembly);
+
+//Create EditDetails
+
+public class EditDetails {
+
+	public class Command: IRequest{
+		public Domain.Activity Activity {get;set;}
+	}
+	
+	public class Handler: IRequestHandler<Command>{
+	
+		private readonly DataContext _context;
+		private readonly IMapper _mapper;
+		public Handler(DataContext context, IMapper mapper){
+			_context=context;
+			_mapper=mapper;
+		}
+		
+		public async Task<Unit> Handle(Command request, CancelationToken cancelationtoken) {
+			var activity= await _context.Activities.FindAsync(request.id);
+			_mapper.Map(request.activity, activity);
+			await _context.SaveChangesAsync();
+			return Unit.Value;
+		}
+	
+	}
+
+}
+
+
+//On the controller
+
+[HttpPut("{id}")]
+public async Task<IActionRequest>EditProfile(Guid Id, Domain.Activity activity){
+	activity.id=Id;
+	return Ok(await Mediator.Send(new EditDetails.Command{Activity=activity}))
+}
